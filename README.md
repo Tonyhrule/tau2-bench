@@ -18,17 +18,27 @@
 <em>Figure 2: Trajectory of a conversation between an agent and a user</em>
 </div>
 
+# Important Note
+
+This repository needs a unique setup. Follow the instructions below to get started, but there are some caveats.
+
+1. Instead of running `tau2 ...` you must run `python src/cli.py ...`
+2. After you install packages, you must uninstall the `tau2` package with pip
+3. Add the `.env` file with `OPENAI_API_KEY` and `CLEANLAB_TLM_API_KEY`
+
 ## Overview
 
 $\tau^2$-bench implements a simulation framework for evaluating customer service agents across various domains.
 
 Each domain specifies:
+
 - a policy that the agent must follow
 - a set of tools that the agent can use
 - a set of tasks to evaluate the agent's performance
 - Optionally: A set of tools that the user simulator can use
 
 Domains are:
+
 - `mock`
 - `airline`
 - `retail`
@@ -39,6 +49,7 @@ All the information that an agent developer needs to build an agent for a domain
 ## Installation
 
 1. Clone the repository:
+
 ```bash
 git clone https://github.com/sierra-research/tau2-bench
 cd tau2-bench
@@ -56,28 +67,13 @@ source .venv/bin/activate
 3. Install tau2
 
 ```bash
-pip install -e .
+pip install .
 ```
 
 This will enable you to run the `tau2` command.
 
-**Note:** If you use `pip install .` (without `-e`), you'll need to set the `TAU2_DATA_DIR` environment variable to point to your data directory:
-
-```bash
-export TAU2_DATA_DIR=/path/to/your/tau2-bench/data
-```
-
-**Check your data directory setup:**
-
-After installation, you can verify that your data directory is correctly configured by running:
-
-```bash
-tau2 check-data
-```
-
-This command will check if the data directory exists and print instructions if it is missing.
-
 To remove all the generated files and the virtual environment, run:
+
 ```bash
 make clean
 ```
@@ -95,7 +91,7 @@ To provide your API keys, copy `.env.example` as `.env` and edit it to include y
 To run a test evaluation on only 5 tasks with 1 trial per task, run:
 
 ```bash
-tau2 run \ 
+tau2 run \
 --domain airline \
 --agent-llm gpt-4.1 \
 --user-llm gpt-4.1 \
@@ -109,7 +105,8 @@ Results will be saved in `data/tau2/simulations/`.
 
 The `tau2` command provides a unified interface for all functionality:
 
-### Running Benchmark 
+### Running Benchmark
+
 ```bash
 tau2 run \
   --domain <domain> \
@@ -121,37 +118,41 @@ tau2 run \
   ...
 ```
 
+The LLM name for the TLM pipeline is `tlm_agent`.
+
 ### Viewing Results
+
 ```bash
 tau2 view
 ```
+
+If you want to view our previous results, you should first move `data/tau2/results/report/tlm_commenting.json` to `data/simulations/tlm_commenting.json`. Note that tau2's viewer does not show trustworthiness scores, but they are in the JSON file if you want to inspect them.
+
 This tool allows you to:
+
 - Browse simulation files (in `data/tau2/simulations/`)
 - View agent performance metrics
 - View a particular simulation
 - View task details
 
 ### View domain documentation
+
 ```bash
 tau2 domain <domain>
 ```
+
 Visit http://127.0.0.1:8004/redoc to see the domain policy and API documentation.
 
 ![domain_viewer1](figs/domain_viewer.png)
 
-### Check data configuration
-```bash
-tau2 check-data
-```
-This command checks if your data directory is properly configured and all required files are present.
-
 ## Experiments
 
 ### Running Ablation Studies (No User, or Agent with Oracle Plan)
+
 `telecom` domain enables running ablation studies.
 
 1. Running an LLM in `no-user` mode. In this mode, the LLM is given all the tools and the information upfront.
-Just choose `llm_agent_solo` as the agent and `dummy_user` as the user.
+   Just choose `llm_agent_solo` as the agent and `dummy_user` as the user.
 
 ```bash
 tau2 run \
@@ -163,7 +164,7 @@ tau2 run \
 ```
 
 2. Running an LLM in `oracle-plan` mode. In this mode, the LLM is given an oracle plan ahead of time alleviating the need for action planning.
-Just choose `llm_agent_gt` as the agent.
+   Just choose `llm_agent_gt` as the agent.
 
 ```bash
 tau2 run \
@@ -175,6 +176,7 @@ tau2 run \
 ```
 
 ### Running Telecom Domain with Workflow Policy
+
 To test the impact of policy format, we provide an additional "workflow" policy for the telecom domain.
 To run using this policy, use the `telecom-workflow` domain.
 
@@ -197,7 +199,9 @@ For all the details see the domains [README](src/tau2/domains/README.md).
 - Each domain has its own configuration and task definitions
 
 #### View domain-specific policy and API docs:
+
 Run the following command to see the domain policy and API documentation.
+
 ```bash
 tau2 env <domain>
 ```
@@ -207,21 +211,25 @@ Then visit http://127.0.0.1:8004/redoc
 ### Environment CLI (beta)
 
 An interactive command-line interface for directly querying and testing domain environments. Features:
+
 - Interactive query interface with domain-specific tools
 - Support for multiple domains (airline, mock, etc.)
 - Session management with history
 
 To use:
+
 ```bash
 make env-cli
 ```
 
 Available commands:
+
 - `:q` - quit the program
 - `:d` - change domain
 - `:n` - start new session (clears history)
 
 Example usage:
+
 ```bash
 $ make env-cli
 
@@ -234,13 +242,14 @@ Assistant: Let me check the flight availability for you...
 ```
 
 The Environment CLI is useful for:
+
 - Testing domain tools and queries
 - Debugging environment responses
 - Exploring available domain functionality
 - Quick domain interaction without starting the full server stack
 
-
 ## Run tests
+
 To run the test suite use the command
 
 ```sh
@@ -252,15 +261,13 @@ make test
 To configure the framework, see the [config](src/tau2/config.py) file.
 
 ### LLM Calls caching
+
 LLM call caching is disabled by default.
 
-To enable LLM calls caching:
-    - Make sure `redis` is running.
-    - Update the redis config in `config.py` if necessary.
-    - Set `LLM_CACHE_ENABLED` to `True` in `config.py`
-
+To enable LLM calls caching: - Make sure `redis` is running. - Update the redis config in `config.py` if necessary. - Set `LLM_CACHE_ENABLED` to `True` in `config.py`
 
 ## Evaluate Your Own Agent
+
 For local or remote agent evaluation, see our [agent developer guide](src/tau2/agent/README.md).
 
 ## Orchestration Sequence Diagram
@@ -310,12 +317,12 @@ sequenceDiagram
 
 ```bibtex
 @misc{barres2025tau2,
-      title={$\tau^2$-Bench: Evaluating Conversational Agents in a Dual-Control Environment}, 
+      title={$\tau^2$-Bench: Evaluating Conversational Agents in a Dual-Control Environment},
       author={Victor Barres and Honghua Dong and Soham Ray and Xujie Si and Karthik Narasimhan},
       year={2025},
       eprint={2506.07982},
       archivePrefix={arXiv},
       primaryClass={cs.AI},
-      url={https://arxiv.org/abs/2506.07982}, 
+      url={https://arxiv.org/abs/2506.07982},
 }
 ```

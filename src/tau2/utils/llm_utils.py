@@ -21,6 +21,7 @@ from tau2.config import (
     USE_LANGFUSE,
 )
 from tau2.data_model.message import (
+    APICompatibleMessage,
     AssistantMessage,
     Message,
     SystemMessage,
@@ -179,7 +180,7 @@ def to_litellm_messages(messages: list[Message]) -> list[dict]:
 
 def generate(
     model: str,
-    messages: list[Message],
+    messages: list[Message] | list[APICompatibleMessage],
     tools: Optional[list[Tool]] = None,
     tool_choice: Optional[str] = None,
     **kwargs: Any,
@@ -226,9 +227,9 @@ def generate(
     except Exception as e:
         logger.error(e)
         raise e
-    assert response.message.role == "assistant", (
-        "The response should be an assistant message"
-    )
+    assert (
+        response.message.role == "assistant"
+    ), "The response should be an assistant message"
     content = response.message.content
     tool_calls = response.message.tool_calls or []
     tool_calls = [
