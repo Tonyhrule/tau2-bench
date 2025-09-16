@@ -110,6 +110,7 @@ The `tau2` command provides a unified interface for all functionality:
 ```bash
 tau2 run \
   --domain <domain> \
+  --agent <agent_name> \
   --agent-llm <llm_name> \
   --user-llm <llm_name> \
   --num-trials <trial_count> \
@@ -118,7 +119,7 @@ tau2 run \
   ...
 ```
 
-The LLM name for the TLM pipeline is `tlm_agent`.
+The agent name for the TLM pipeline is `tlm_agent`.
 
 ### Viewing Results
 
