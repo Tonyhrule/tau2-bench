@@ -365,10 +365,7 @@ class Orchestrator:
         Get the trajectory of the simulation.
         The trajectory is sorted by timestamp, turn_idx are added to messages, trajectory is returned.
         """
-        messages: list[Message] = sorted(
-            deepcopy(self.trajectory),
-            key=lambda x: x.timestamp,
-        )
+        messages: list[Message] = deepcopy(self.trajectory)
         trajectory = []
         for i, msg in enumerate(messages):
             msg = deepcopy(msg)
