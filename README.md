@@ -1,3 +1,8 @@
+> **Fork Notice**  
+> This repository is a modified fork of the original `tau2-bench`, adapted to run experiments with the **Cleanlab Trustworthy Language Model (TLM)**.  
+> It also includes the **experiment log files** used in the blog  
+> *“Automated Hallucination Correction for AI Agents: A Case Study on Tau²-Bench.”*
+
 # $\tau^2$-Bench: Evaluating Conversational Agents in a Dual-Control Environment
 
 [![python](https://img.shields.io/badge/Python-3.10%2B-blue.svg?style=flat&logo=python&logoColor=white)](https://www.python.org)
