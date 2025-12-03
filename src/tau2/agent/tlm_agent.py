@@ -103,42 +103,8 @@ class TLMAgent(LLMAgent):
             }
 
         review_messages = deepcopy(messages)
-        custom_eval_criteria = []
 
-        if assistant_message.tool_calls:
-            policy = ""
-
-            for tool_call in assistant_message.tool_calls:
-                tool_name = tool_call.name
-                if tool_name in instructions:
-                    if instructions[tool_name] not in policy:
-                        policy += f"\n\n## {instructions[tool_name]}"
-
-            if "transfer_to_human_agents" in [
-                tool_call.name for tool_call in assistant_message.tool_calls
-            ]:
-                custom_eval_criteria.append(
-                    {
-                        "name": "human_transfer",
-                        "criteria": f"""Determine if the agent has exhausted all possibilities using the policy before transferring to human agents.
-Policy:
-{self.domain_policy}""",
-                    }
-                )
-            else:
-                custom_eval_criteria.append(
-                    {
-                        "name": "policy_compliance",
-                        "criteria": f"""Determine if the response follows the domain policy: {policy}""",
-                    }
-                )
-
-        tlm = TLM(
-            options={
-                "log": ["explanation"],
-                "custom_eval_criteria": custom_eval_criteria,
-            }
-        )
+        tlm = TLM(options={"log": ["explanation"]})
 
         openai_messages = to_litellm_messages(review_messages)  # type: ignore
         for message in openai_messages:
@@ -175,18 +141,12 @@ Policy:
             messages, assistant_message
         )
 
-        failed_custom_criteria = [
-            criteria["name"]
-            for criteria in trustworthiness["log"].get("custom_eval_criteria", [])
-            if criteria["score"] < 0.75
-        ]
-
         if assistant_message.raw_data is None:
             assistant_message.raw_data = {}
 
         assistant_message.raw_data["trustworthiness"] = trustworthiness
 
-        if trustworthiness["trustworthiness_score"] < 0.75 or failed_custom_criteria:
+        if trustworthiness["trustworthiness_score"] < 0.75:
             canceled_tool_messages = []
             if assistant_message.tool_calls:
                 canceled_tool_messages = [
@@ -206,46 +166,6 @@ Policy:
                     del msg["tool_calls"]
             pretty_messages = form_prompt_string(openai_messages, self.tools_info)
 
-            if trustworthiness["trustworthiness_score"] < 0.75:
-                reasons.append(trustworthiness["log"]["explanation"])
-
-            def get_reason(prompt: str) -> str:
-                return generate(
-                    model=self.llm,
-                    messages=[
-                        SystemMessage(
-                            role="system",
-                            content="You are to respond consisely with only what the user tells you to, nothing else.",
-                        ),
-                        UserMessage(
-                            role="user",
-                            content=f"""{prompt}
-
-Policy:
-{self.domain_policy}
-
-Message History:
-{pretty_messages}""",
-                        ),
-                    ],
-                ).content.strip()  # type: ignore
-
-            if "human_transfer" in failed_custom_criteria:
-                reason = get_reason(
-                    "The agent transferred to a human agent without exhausting all possibilities using the policy. Respond with something it could have tried before transferring."
-                )
-                reasons.append(
-                    f"The agent transferred to human agents without exhausting all possibilities using the policy. It still could have tried: {reason}"  # type: ignore
-                )
-
-            if "policy_compliance" in failed_custom_criteria:
-                reason = get_reason(
-                    "The agent's response did not follow the domain policy. Respond with what it did not follow."
-                )
-                reasons.append(
-                    f"The agent's response did not follow the domain policy. The policy it violated was: {reason}"
-                )
-
             reasons = "\n\n".join(reasons)
 
             correction: AssistantMessage = generate(  # type: ignore
@@ -261,8 +181,8 @@ Message History:
 Message History:
 {pretty_messages}{form_response_string_chat_completions_api(to_litellm_messages([assistant_message])[0])}
 
-Potential Reasons:
-{reasons}""",
+Explanation of Issues:
+{trustworthiness["log"]["explanation"]}""",
                     ),
                 ],
                 **self.llm_args,
@@ -290,22 +210,9 @@ Information:
                 new_assistant_message,
             )
 
-            if min(
-                [new_trustworthiness["trustworthiness_score"]]
-                + [
-                    criteria["score"]
-                    for criteria in new_trustworthiness["log"].get(
-                        "custom_eval_criteria", []
-                    )
-                ]
-            ) > min(
-                [trustworthiness["trustworthiness_score"]]
-                + [
-                    criteria["score"]
-                    for criteria in trustworthiness["log"].get(
-                        "custom_eval_criteria", []
-                    )
-                ]
+            if (
+                new_trustworthiness["trustworthiness_score"]
+                > trustworthiness["trustworthiness_score"]
             ):
                 if new_assistant_message.raw_data is None:
                     new_assistant_message.raw_data = {}
