@@ -1,7 +1,9 @@
 from copy import deepcopy
+from json import dumps, loads
+import os
 from typing import Any, List, Optional
 
-from cleanlab_tlm import TLM
+from codex import Client
 
 from tau2.agent.base import (
     ValidAgentInputMessage,
@@ -13,19 +15,86 @@ from tau2.agent.llm_agent import (
     LLMAgentState,
 )
 from tau2.data_model.message import (
-    APICompatibleMessage,
     AssistantMessage,
     MultiToolMessage,
-    SystemMessage,
-    ToolMessage,
-    UserMessage,
 )
 from tau2.environment.tool import Tool
+from tau2.utils.guidance import consult
 from tau2.utils.llm_utils import generate, to_litellm_messages
-from cleanlab_tlm.utils.chat import (
-    form_prompt_string,
-    form_response_string_chat_completions_api,
-)
+
+import uuid
+import time
+
+from cleanlab_codex import Project
+
+from openai.types.chat import ChatCompletion
+
+client = Client(api_key=os.getenv("CODEX_API_KEY"))
+project = Project(client, os.getenv("CLEANLAB_PROJECT_ID", ""))
+
+# from cleanlab_tlm.utils.chat import (
+#     form_prompt_string,
+#     form_response_string_chat_completions_`api`,
+# )
+
+
+def message_to_chat_completion(
+    msg: AssistantMessage, model="dummy-model-v1"
+) -> ChatCompletion:
+    """
+    Convert your internal message schema into a valid ChatCompletion API object.
+    """
+
+    message = loads(dumps(msg.model_dump()))
+
+    if message.get("tool_calls") is not None:
+        toolCalls = message.get("tool_calls")
+        for tc in toolCalls:
+            tc["function"] = {
+                "name": tc["name"],
+                "arguments": dumps(tc["arguments"]),
+            }
+            tc["type"] = "function"
+            del tc["name"]
+            del tc["arguments"]
+    else:
+        toolCalls = None
+
+    usage = message.get("usage", {}) or {}
+
+    # AUTO-FILL usage if missing
+    prompt_tokens = usage.get("prompt_tokens", 0)
+    completion_tokens = usage.get("completion_tokens", 0)
+    total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
+
+    # BUILD ChatCompletion FORMAT
+    chatCompletion = {
+        "id": f"chatcmpl-{uuid.uuid4()}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": message.get("content"),
+                },
+            }
+        ],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        },
+    }
+
+    # If tool_calls exist → embed them inside choices[].message
+    if toolCalls is not None:
+        chatCompletion["choices"][0]["message"]["tool_calls"] = toolCalls
+
+    return chatCompletion  # type: ignore
 
 
 class TLMAgent(LLMAgent):
@@ -55,71 +124,6 @@ class TLMAgent(LLMAgent):
             agent_instruction=AGENT_INSTRUCTION,
         )
 
-    def trustworthiness_from_messages(
-        self, messages: list[APICompatibleMessage], assistant_message: AssistantMessage
-    ) -> Any:
-        """Calculate the trustworthiness of the response based on the messages."""
-
-        instruction_list = self.domain_policy.replace("### ", "").split("## ")[2:]
-        instruction_dic = {}
-        for instruction in instruction_list:
-            instruction_name = instruction.split("\n")[0]
-            instruction_dic[instruction_name] = instruction
-        if "Book flight" in instruction_dic:
-            # Airline
-            instructions = {
-                "book_reservation": instruction_dic["Book flight"],
-                "update_reservation_baggages": instruction_dic["Modify flight"],
-                "update_reservation_flights": instruction_dic["Modify flight"],
-                "update_reservation_passengers": instruction_dic["Modify flight"],
-                "cancel_reservation": instruction_dic["Cancel flight"],
-                "send_certificate": instruction_dic["Refunds and Compensation"],
-            }
-        elif "Exchange delivered order" in instruction_dic:
-            # Retail
-            instructions = {
-                "cancel_pending_order": instruction_dic["Cancel pending order"],
-                "modify_pending_order_address": instruction_dic["Modify pending order"],
-                "modify_pending_order_payment": instruction_dic["Modify pending order"],
-                "modify_pending_order_items": instruction_dic["Modify pending order"],
-                "return_delivered_order_items": instruction_dic[
-                    "Return delivered order"
-                ],
-                "exchange_delivered_order_items": instruction_dic[
-                    "Exchange delivered order"
-                ],
-            }
-        elif "Data Refueling" in instruction_dic:
-            # Telecom
-            instructions = {
-                "get_customer_by_phone": instruction_dic["Customer Lookup"],
-                "get_customer_by_id": instruction_dic["Customer Lookup"],
-                "get_customer_by_name": instruction_dic["Customer Lookup"],
-                "send_payment_request": instruction_dic["Overdue Bill Payment"],
-                "suspend_line": instruction_dic["Line Suspension"],
-                "refuel_data": instruction_dic["Data Refueling"],
-                "enable_roaming": instruction_dic["Data Roaming"],
-                "disable_roaming": instruction_dic["Data Roaming"],
-            }
-
-        review_messages = deepcopy(messages)
-
-        tlm = TLM(options={"log": ["explanation"]})
-
-        openai_messages = to_litellm_messages(review_messages)  # type: ignore
-        for message in openai_messages:
-            if "tool_calls" in message and message["tool_calls"] is None:
-                del message["tool_calls"]
-
-        openai_response = to_litellm_messages([assistant_message])[0]
-        if "tool_calls" in openai_response and openai_response["tool_calls"] is None:
-            del openai_response["tool_calls"]
-
-        return tlm.get_trustworthiness_score(
-            form_prompt_string(openai_messages, self.tools_info),
-            form_response_string_chat_completions_api(openai_response),
-        )
-
     def generate_next_message(
         self, message: ValidAgentInputMessage, state: LLMAgentState
     ) -> tuple[AssistantMessage, LLMAgentState]:
@@ -128,117 +132,47 @@ class TLMAgent(LLMAgent):
         """
         if isinstance(message, MultiToolMessage):
             state.messages.extend(message.tool_messages)
+            message_content = (
+                f"Tool calls received: "
+                f"{', '.join([str(tm) for tm in message.tool_messages])}."
+            )
         else:
             state.messages.append(message)
+            message_content = message.content
         messages = state.system_messages + state.messages
+
+        print(consult(message_content, to_litellm_messages(messages)))  # type: ignore
+
         assistant_message: AssistantMessage = generate(  # type: ignore
             model=self.llm,
             tools=self.tools,
             messages=messages,
             **self.llm_args,
         )
-        trustworthiness = self.trustworthiness_from_messages(
-            messages, assistant_message
+
+        chat_completion_messages = to_litellm_messages(messages)  # type: ignore
+
+        for msg in chat_completion_messages:
+            if msg.get("arguments") is not None:
+                msg["function"] = {
+                    "name": msg["name"],
+                    "arguments": dumps(msg["arguments"]),
+                }
+                msg["type"] = "function"
+                del msg["name"]
+                del msg["arguments"]
+            if msg.get("tool_calls", "") is None:
+                del msg["tool_calls"]
+
+        validation_result = project.validate(
+            response=message_to_chat_completion(assistant_message),
+            query=message_content,
+            context=self.system_prompt,
+            messages=chat_completion_messages,
+            tools=[tool.openai_schema for tool in self.tools],
         )
 
-        if assistant_message.raw_data is None:
-            assistant_message.raw_data = {}
-
-        assistant_message.raw_data["trustworthiness"] = trustworthiness
-
-        if trustworthiness["trustworthiness_score"] < 0.75:
-            canceled_tool_messages = []
-            if assistant_message.tool_calls:
-                canceled_tool_messages = [
-                    ToolMessage(
-                        id=tool_call.id,
-                        role="tool",
-                        content="Tool Call Canceled",
-                        requestor="assistant",
-                    )
-                    for tool_call in assistant_message.tool_calls
-                ]
-
-            reasons = []
-            openai_messages = to_litellm_messages(messages)  # type: ignore
-            for msg in openai_messages:
-                if "tool_calls" in msg and msg["tool_calls"] is None:
-                    del msg["tool_calls"]
-            pretty_messages = form_prompt_string(openai_messages, self.tools_info)
-
-            reasons = "\n\n".join(reasons)
-
-            correction: AssistantMessage = generate(  # type: ignore
-                model=self.llm,
-                messages=[
-                    SystemMessage(
-                        role="system",
-                        content="You are to respond consisely with only what the user tells you to, nothing else.",
-                    ),
-                    UserMessage(
-                        role="user",
-                        content=f"""In the following message chain, the assistant's message was not trustworthy. Pinpoint the specific issues with the assistant's response and explain what it should have done instead.
-Message History:
-{pretty_messages}{form_response_string_chat_completions_api(to_litellm_messages([assistant_message])[0])}
-
-Explanation of Issues:
-{trustworthiness["log"]["explanation"]}""",
-                    ),
-                ],
-                **self.llm_args,
-            )
-
-            new_assistant_message: AssistantMessage = generate(  # type: ignore
-                model=self.llm,
-                tools=self.tools,
-                messages=messages
-                + [assistant_message]
-                + canceled_tool_messages
-                + [
-                    SystemMessage(
-                        role="system",
-                        content=f"""Your last response was not trustworthy. Rewrite your response to be more trustworthy.
-Information:
-{correction.content}""",
-                    )
-                ],
-                **self.llm_args,
-            )
-
-            new_trustworthiness = self.trustworthiness_from_messages(
-                messages,
-                new_assistant_message,
-            )
-
-            if (
-                new_trustworthiness["trustworthiness_score"]
-                > trustworthiness["trustworthiness_score"]
-            ):
-                if new_assistant_message.raw_data is None:
-                    new_assistant_message.raw_data = {}
-
-                new_assistant_message.raw_data["trustworthiness"] = new_trustworthiness
-                new_assistant_message.raw_data["previous_trustworthiness"] = (
-                    trustworthiness
-                )
-                new_assistant_message.raw_data["previous_content"] = (
-                    assistant_message.content
-                )
-
-                new_assistant_message.raw_data["previous_tool_calls"] = (
-                    assistant_message.tool_calls
-                )
-                assistant_message = new_assistant_message
-            else:
-                assistant_message.raw_data["attempt_trustworthiness"] = (
-                    new_trustworthiness
-                )
-                assistant_message.raw_data["attempt_content"] = (
-                    new_assistant_message.content
-                )
-                assistant_message.raw_data["attempt_tool_calls"] = (
-                    new_assistant_message.tool_calls
-                )
+        print(validation_result)
 
         state.messages.append(assistant_message)
         return assistant_message, state
