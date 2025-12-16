@@ -18,8 +18,6 @@ from tau2.data_model.message import (
     AssistantMessage,
     MultiToolMessage,
     SystemMessage,
-    ToolMessage,
-    UserMessage,
 )
 from tau2.environment.tool import Tool
 from tau2.utils.guidance import consult
@@ -35,10 +33,10 @@ from openai.types.chat import ChatCompletion
 client = Client(api_key=os.getenv("CODEX_API_KEY"))
 project = Project(client, os.getenv("CLEANLAB_PROJECT_ID", ""))
 
-from cleanlab_tlm.utils.chat import (
-    form_prompt_string,
-    form_response_string_chat_completions,
-)
+# from cleanlab_tlm.utils.chat import (
+#     form_prompt_string,
+#     form_response_string_chat_completions_`api`,
+# )
 
 
 def message_to_chat_completion(
@@ -144,10 +142,22 @@ class TLMAgent(LLMAgent):
             message_content = message.content
         messages = state.system_messages + state.messages
 
+        guidance = consult(message_content, to_litellm_messages(messages))  # type: ignore
+
         assistant_message: AssistantMessage = generate(  # type: ignore
             model=self.llm,
             tools=self.tools,
-            messages=messages,
+            messages=messages
+            + (
+                [
+                    SystemMessage(
+                        role="system",
+                        content="Remember the following:\n" + "\n".join(guidance),
+                    )
+                ]
+                if guidance
+                else []
+            ),
             # **self.llm_args,
         )
 
@@ -167,10 +177,10 @@ class TLMAgent(LLMAgent):
 
         validation_result = project.validate(
             response=message_to_chat_completion(assistant_message),
-            query=message_content,  # type: ignore
+            query=message_content,
             context=self.system_prompt,
-            messages=chat_completion_messages,  # type: ignore
-            tools=[tool.openai_schema for tool in self.tools],  # type: ignore
+            messages=chat_completion_messages,
+            tools=[tool.openai_schema for tool in self.tools],
             metadata=(
                 {"task_id": self.llm_args.get("task_id")}
                 if self.llm_args.get("task_id")
@@ -178,129 +188,7 @@ class TLMAgent(LLMAgent):
             ),
         )
 
-        if assistant_message.raw_data is None:
-            assistant_message.raw_data = {}
-
-        groundedness = None
-
-        if "response_groundedness" in validation_result.eval_scores:
-            groundedness = validation_result.eval_scores["response_groundedness"].score
-
-        assistant_message.raw_data["trustworthiness"] = groundedness
-
-        if (
-            "response_groundedness" in validation_result.eval_scores
-            and validation_result.eval_scores["response_groundedness"].triggered
-        ):
-            find_reason_prompt = f"""Prior Messages:
-{form_prompt_string(chat_completion_messages, [tool.openai_schema for tool in self.tools])}
-
-Review the Response to the query and assess whether every factual claim in the Response is explicitly supported by the provided Context.
-A Response meets the criteria if all information is directly backed by evidence in the Context, without relying on assumptions, external knowledge, or unstated inferences.
-The focus is on whether the Response is fully grounded in the Context, rather than whether it fully addresses the query.
-If any claim in the Response lacks direct support or introduces information not present in the Context, the Response is bad and does not meet the criteria.
-Your job is to find out why the Response is not fully grounded in the Context.
-You will now be provided with the Response and Context.
-Just respond with the reason(s) why the Response is not fully grounded in the Context.
-
-Context:
-{self.system_prompt}
-
-Response:
-{assistant_message.content if assistant_message.content else ""}
-{dumps([tc.model_dump() for tc in assistant_message.tool_calls], indent=2) if assistant_message.tool_calls else ""}"""
-            reasons: AssistantMessage = generate(
-                model=self.llm,
-                tools=self.tools,
-                messages=[
-                    UserMessage(
-                        role="user",
-                        content=find_reason_prompt,
-                    ),
-                ],
-                # **self.llm_args,
-            )  # type: ignore
-
-            revision_prompt = f"""Now, based on the reasons you just provided, revise the previous Response to ensure it is fully grounded in the Context.
-Here is a reminder of the Response:
-{assistant_message.content if assistant_message.content else ""}
-{dumps([tc.model_dump() for tc in assistant_message.tool_calls], indent=2) if assistant_message.tool_calls else ""}
-
-Only respond with the revised Response."""
-            new_assistant_message: AssistantMessage = generate(
-                model=self.llm,
-                tools=self.tools,
-                messages=[
-                    UserMessage(
-                        role="user",
-                        content=find_reason_prompt,
-                    ),
-                    reasons,
-                    UserMessage(
-                        role="user",
-                        content=revision_prompt,
-                    ),
-                ],
-                # **self.llm_args,
-            )  # type: ignore
-
-            revised_validation = project.validate(
-                response=message_to_chat_completion(new_assistant_message),
-                query=message_content,  # type: ignore
-                context=self.system_prompt,
-                messages=chat_completion_messages,  # type: ignore
-                tools=[tool.openai_schema for tool in self.tools],  # type: ignore
-                metadata=(
-                    {"task_id": self.llm_args.get("task_id")}
-                    if self.llm_args.get("task_id")
-                    else {}
-                ),
-            )
-
-            if new_assistant_message.raw_data is None:
-                new_assistant_message.raw_data = {}
-
-            revised_groundedness = None
-
-            if "response_groundedness" in revised_validation.eval_scores:
-                revised_groundedness = revised_validation.eval_scores[
-                    "response_groundedness"
-                ].score
-
-            assistant_message.raw_data["trustworthiness"] = revised_groundedness
-
-            new_assistant_message.raw_data["trustworthiness"] = revised_groundedness
-
-            if (
-                revised_groundedness
-                and revised_groundedness > groundedness  # type: ignore
-            ):
-                new_assistant_message.raw_data["previous_trustworthiness"] = (
-                    groundedness
-                )
-                new_assistant_message.raw_data["previous_content"] = (
-                    assistant_message.content
-                )
-
-                new_assistant_message.raw_data["previous_tool_calls"] = (
-                    assistant_message.tool_calls
-                )
-
-                print("New assistant message is more grounded")
-                print("Old message:", assistant_message.content)
-                print("New message:", new_assistant_message.content)
-
-                assistant_message = new_assistant_message
-            else:
-                assistant_message.raw_data["attempt_trustworthiness"] = (
-                    revised_groundedness
-                )
-                assistant_message.raw_data["attempt_content"] = (
-                    new_assistant_message.content
-                )
-                assistant_message.raw_data["attempt_tool_calls"] = (
-                    new_assistant_message.tool_calls
-                )
+        print(validation_result)
 
         state.messages.append(assistant_message)
         return assistant_message, state
