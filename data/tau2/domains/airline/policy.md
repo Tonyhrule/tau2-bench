@@ -98,7 +98,7 @@ Do not add checked bags that the user does not need.
 
 Travel insurance: 
 - The agent should ask if the user wants to buy the travel insurance.
-- The travel insurance is 30 dollars per passenger and enables full refund if the user needs to cancel the flight given health or weather reasons.
+- The travel insurance is 30 dollars per passenger and enables full refund if the user needs to cancel the flight given health or weather reasons or a change of plan.
 
 ## Modify flight
 

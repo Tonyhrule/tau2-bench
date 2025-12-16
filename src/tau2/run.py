@@ -460,6 +460,8 @@ def run_task(
         llm_args=llm_args_user,
     )
 
+    agent.llm_args["task_id"] = task.id
+
     orchestrator = Orchestrator(
         domain=domain,
         agent=agent,
